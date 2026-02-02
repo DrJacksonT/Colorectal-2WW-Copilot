@@ -648,9 +648,7 @@ export default function App() {
               ) : null}
             </div>
 
-            <div style={{ marginTop: 12, ...S.hint }}>
-              Next improvements: add the missing <b>FIT &lt;10 guidance</b> section and the <b>after-test-results</b> stage (cancer vs no cancer).
-            </div>
+            
           </section>
         </div>
       </div>
