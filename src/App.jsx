@@ -18,12 +18,8 @@ const pathways = [
   { key: "ida_gt_50", label: "Iron deficiency anaemia (age >50)" },
   { key: "ida_lt_50", label: "Iron deficiency anaemia (age <50)" },
   {
-    key: "rb_cibh_lt_50_anaemia",
-    label: "Rectal bleeding + CIBH (age <50) WITH anaemia",
-  },
-  {
-    key: "rb_cibh_lt_50_no_anaemia",
-    label: "Rectal bleeding + CIBH (age <50) WITHOUT anaemia",
+    key: "rb_cibh_lt_50",
+    label: "Rectal bleeding + CIBH (age <50)",
   },
   { key: "wl_50_85", label: "Weight loss (age 50–85)" },
   { key: "wl_lt_50_or_gt_85", label: "Weight loss (age <50 OR >85)" },
@@ -56,10 +52,7 @@ function decision({ pathway, age, fit, frailElderly, anaemia, whoStatus }) {
 
   // We flag these as missing when relevant, but we still attempt a best-effort outcome.
   if (pathway === "abdominal_mass" && frailElderly === null) missing.push("frail/elderly status");
-  if (
-    (pathway === "rb_cibh_lt_50_anaemia" || pathway === "rb_cibh_lt_50_no_anaemia") &&
-    anaemia === null
-  ) {
+  if (pathway === "rb_cibh_lt_50" && anaemia === null) {
     missing.push("anaemia status");
   }
 
@@ -194,41 +187,25 @@ function decision({ pathway, age, fit, frailElderly, anaemia, whoStatus }) {
       return finalize(res);
     }
 
-    // Rule set F
-    case "rb_cibh_lt_50_anaemia": {
-      res.step = "Rule set F: Rectal bleeding + CIBH <50 with anaemia";
+    // Rule set F & G combined
+    case "rb_cibh_lt_50": {
+      res.step = "Rule set F/G: Rectal bleeding + CIBH <50";
       if (anaemia === true) {
         res.outcome = "Colonoscopy";
         res.mapping.push("RB + CIBH <50 + anaemia → colonoscopy regardless of FIT.");
       } else if (anaemia === false) {
-        res.outcome = "Anaemia not present — select the 'WITHOUT anaemia' pathway";
-        res.mapping.push("This pathway applies only if anaemia is present.");
+        if (band === "10_100" || band === "gt_100") {
+          res.outcome = "Flexible sigmoidoscopy (FOS) → if NAD, proceed to colonoscopy";
+          res.mapping.push("RB + CIBH <50 no anaemia + FIT ≥10 → FOS then if NAD proceed to colonoscopy.");
+        } else if (band === "lt_10") {
+          res.outcome = "Flexible sigmoidoscopy";
+          res.mapping.push("RB + CIBH <50 no anaemia + FIT <10 → flexible sigmoidoscopy.");
+        } else {
+          res.outcome = "Needs FIT result";
+        }
       } else {
         res.outcome = "Needs anaemia status";
-        res.mapping.push("If anaemia is present → colonoscopy regardless of FIT.");
-      }
-      if (age !== null && !Number.isNaN(age) && age >= 50) {
-        res.supplementary.push("Age entered is not <50 for this pathway selection.");
-      }
-      return finalize(res);
-    }
-
-    // Rule set G
-    case "rb_cibh_lt_50_no_anaemia": {
-      res.step = "Rule set G: Rectal bleeding + CIBH <50 without anaemia";
-      if (anaemia === true) {
-        res.outcome = "Anaemia present — select the 'WITH anaemia' pathway (colonoscopy regardless of FIT)";
-        res.mapping.push("With anaemia, rule set F overrides FIT band.");
-        return finalize(res);
-      }
-      if (band === "10_100" || band === "gt_100") {
-        res.outcome = "Flexible sigmoidoscopy (FOS) → if NAD, proceed to colonoscopy";
-        res.mapping.push("RB + CIBH <50 no anaemia + FIT ≥10 → FOS then if NAD proceed to colonoscopy.");
-      } else if (band === "lt_10") {
-        res.outcome = "Flexible sigmoidoscopy";
-        res.mapping.push("RB + CIBH <50 no anaemia + FIT <10 → flexible sigmoidoscopy.");
-      } else {
-        res.outcome = "Needs FIT result";
+        res.mapping.push("If anaemia present → colonoscopy regardless of FIT. If absent, follow FIT-band guidance for FOS/colonoscopy.");
       }
       if (anaemia === null) {
         res.supplementary.push("Anaemia status missing: if anaemia present → colonoscopy regardless of FIT.");
@@ -484,8 +461,7 @@ export default function App() {
   }
 
   const showFrail = pathway === "abdominal_mass";
-  const showAnaemia =
-    pathway === "rb_cibh_lt_50_anaemia" || pathway === "rb_cibh_lt_50_no_anaemia";
+  const showAnaemia = pathway === "rb_cibh_lt_50";
 
   return (
     <div style={S.page}>
@@ -550,63 +526,49 @@ export default function App() {
               </div>
             </div>
 
-            <div style={{ marginTop: 14, padding: 12, borderRadius: 14, border: "1px solid rgba(255,255,255,0.12)", background: "rgba(255,255,255,0.04)" }}>
-              <div style={{ fontSize: 12, fontWeight: 800, color: "#b9c6e6", textTransform: "uppercase", letterSpacing: 1 }}>
-                Conditional flags
+            {showFrail && (
+              <div style={{ marginTop: 14, padding: 12, borderRadius: 14, border: "1px solid rgba(255,255,255,0.12)", background: "rgba(255,255,255,0.04)" }}>
+                <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", gap: 10, flexWrap: "wrap" }}>
+                  <div>
+                    <div style={{ fontWeight: 700 }}>Frail / elderly</div>
+                    <div style={S.hint}>Used for Rule set A (abdominal mass).</div>
+                  </div>
+                  <div style={S.segmented}>
+                    <button style={S.segBtn(frailElderly === true)} onClick={() => setFrailElderly(true)}>
+                      Yes
+                    </button>
+                    <button style={S.segBtn(frailElderly === false)} onClick={() => setFrailElderly(false)}>
+                      No
+                    </button>
+                    <button style={S.segBtn(frailElderly === null)} onClick={() => setFrailElderly(null)}>
+                      —
+                    </button>
+                  </div>
+                </div>
               </div>
+            )}
 
-              {showFrail ? (
-                <div style={{ marginTop: 10 }}>
-                  <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", gap: 10, flexWrap: "wrap" }}>
-                    <div>
-                      <div style={{ fontWeight: 700 }}>Frail / elderly</div>
-                      <div style={S.hint}>Used for Rule set A (abdominal mass).</div>
-                    </div>
-                    <div style={S.segmented}>
-                      <button style={S.segBtn(frailElderly === true)} onClick={() => setFrailElderly(true)}>
-                        Yes
-                      </button>
-                      <button style={S.segBtn(frailElderly === false)} onClick={() => setFrailElderly(false)}>
-                        No
-                      </button>
-                      <button style={S.segBtn(frailElderly === null)} onClick={() => setFrailElderly(null)}>
-                        —
-                      </button>
-                    </div>
+            {showAnaemia && (
+              <div style={{ marginTop: 14, padding: 12, borderRadius: 14, border: "1px solid rgba(255,255,255,0.12)", background: "rgba(255,255,255,0.04)" }}>
+                <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", gap: 10, flexWrap: "wrap" }}>
+                  <div>
+                    <div style={{ fontWeight: 700 }}>Anaemia present</div>
+                    <div style={S.hint}>Used for rectal bleeding + CIBH &lt;50 pathways.</div>
+                  </div>
+                  <div style={S.segmented}>
+                    <button style={S.segBtn(anaemia === true)} onClick={() => setAnaemia(true)}>
+                      Yes
+                    </button>
+                    <button style={S.segBtn(anaemia === false)} onClick={() => setAnaemia(false)}>
+                      No
+                    </button>
+                    <button style={S.segBtn(anaemia === null)} onClick={() => setAnaemia(null)}>
+                      —
+                    </button>
                   </div>
                 </div>
-              ) : (
-                <div style={S.hint}>
-                  Frail/elderly only applies to <b>Abdominal mass</b>.
-                </div>
-              )}
-
-              {showAnaemia ? (
-                <div style={{ marginTop: 12 }}>
-                  <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", gap: 10, flexWrap: "wrap" }}>
-                    <div>
-                      <div style={{ fontWeight: 700 }}>Anaemia present</div>
-                      <div style={S.hint}>Used for rectal bleeding + CIBH &lt;50 pathways.</div>
-                    </div>
-                    <div style={S.segmented}>
-                      <button style={S.segBtn(anaemia === true)} onClick={() => setAnaemia(true)}>
-                        Yes
-                      </button>
-                      <button style={S.segBtn(anaemia === false)} onClick={() => setAnaemia(false)}>
-                        No
-                      </button>
-                      <button style={S.segBtn(anaemia === null)} onClick={() => setAnaemia(null)}>
-                        —
-                      </button>
-                    </div>
-                  </div>
-                </div>
-              ) : (
-                <div style={{ marginTop: 10, ...S.hint }}>
-                  Anaemia flag only applies to <b>Rectal bleeding + CIBH &lt;50</b>.
-                </div>
-              )}
-            </div>
+              </div>
+            )}
 
             <div style={{ marginTop: 14, padding: 12, borderRadius: 14, border: "1px solid rgba(255,255,255,0.12)", background: "rgba(255,255,255,0.04)" }}>
               <div style={{ fontSize: 12, fontWeight: 800, color: "#b9c6e6", textTransform: "uppercase", letterSpacing: 1 }}>
