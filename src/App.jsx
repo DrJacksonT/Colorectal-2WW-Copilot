@@ -400,6 +400,19 @@ const S = {
   },
   list: { margin: "8px 0 0 0", paddingLeft: 18, color: "#d7e2ff", lineHeight: 1.5 },
   hint: { fontSize: 12, color: "#b9c6e6", marginTop: 6, lineHeight: 1.35 },
+  author: {
+    marginTop: 40,
+    paddingTop: 20,
+    borderTop: "1px solid rgba(255,255,255,0.12)",
+    textAlign: "center",
+    fontSize: 12,
+    color: "#b9c6e6",
+    lineHeight: 1.6,
+  },
+  authorHighlight: {
+    fontWeight: 600,
+    color: "#eaf0ff",
+  },
 };
 
 export default function App() {
@@ -658,6 +671,10 @@ export default function App() {
 
             
           </section>
+        </div>
+
+        <div style={S.author}>
+          <div>Website developed by <span style={S.authorHighlight}>Dr Theo Jackson</span> at <span style={S.authorHighlight}>UHNM</span></div>
         </div>
       </div>
     </div>
