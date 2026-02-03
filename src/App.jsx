@@ -12,6 +12,7 @@ import React, { useMemo, useState } from "react";
 
 const pathways = [
   { key: "abdominal_mass", label: "Abdominal mass" },
+  { key: "anal_rectal_lesion", label: "Anal or rectal lesion" },
   { key: "cibh_50_85", label: "Change in bowel habit (age 50–85)" },
   { key: "cibh_gt_85", label: "Change in bowel habit (age >85)" },
   { key: "ida_gt_50", label: "Iron deficiency anaemia (age >50)" },
@@ -48,8 +49,10 @@ function bandLabel(band) {
 function decision({ pathway, age, fit, frailElderly, anaemia, whoStatus }) {
   const missing = [];
   if (!pathway) missing.push("pathway selection");
-  if (age === null || Number.isNaN(age)) missing.push("age");
-  if (fit === null || Number.isNaN(fit)) missing.push("FIT test result");
+  if (pathway && pathway !== "anal_rectal_lesion") {
+    if (age === null || Number.isNaN(age)) missing.push("age");
+    if (fit === null || Number.isNaN(fit)) missing.push("FIT test result");
+  }
 
   // We flag these as missing when relevant, but we still attempt a best-effort outcome.
   if (pathway === "abdominal_mass" && frailElderly === null) missing.push("frail/elderly status");
@@ -108,6 +111,12 @@ function decision({ pathway, age, fit, frailElderly, anaemia, whoStatus }) {
           "Frail/elderly status missing: if frail/elderly, pathway specifies CT AP regardless of FIT band." 
         );
       }
+      return finalize(res);
+    }
+    case "anal_rectal_lesion": {
+      res.step = "Rule set: Anal or rectal lesion";
+      res.outcome = "Face-to-face assessment";
+      res.mapping.push("Anal or rectal lesion → face-to-face assessment.");
       return finalize(res);
     }
 
