@@ -551,6 +551,9 @@ export default function App() {
     } else {
       lines.push(`Flowchart logic: **${result.step || "â€”"}**`);
     }
+    lines.push("");
+    lines.push("GP entered information for consideration:");
+    lines.push("");
     return lines.join("\n");
   }, [patientName, hospitalNumber, dob, pathway, age, fit, frailElderly, anaemia, whoStatus, recentImaging, result]);
 
