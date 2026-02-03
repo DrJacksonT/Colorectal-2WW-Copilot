@@ -12,6 +12,7 @@ import React, { useMemo, useState } from "react";
 
 const pathways = [
   { key: "abdominal_mass", label: "Abdominal mass" },
+  { key: "anal_rectal_lesion", label: "Anal or rectal lesion" },
   { key: "cibh_50_85", label: "Change in bowel habit (age 50–85)" },
   { key: "cibh_gt_85", label: "Change in bowel habit (age >85)" },
   { key: "ida_gt_50", label: "Iron deficiency anaemia (age >50)" },
@@ -45,11 +46,13 @@ function bandLabel(band) {
   return band;
 }
 
-function decision({ pathway, age, fit, frailElderly, anaemia }) {
+function decision({ pathway, age, fit, frailElderly, anaemia, whoStatus }) {
   const missing = [];
   if (!pathway) missing.push("pathway selection");
-  if (age === null || Number.isNaN(age)) missing.push("age");
-  if (fit === null || Number.isNaN(fit)) missing.push("FIT test result");
+  if (pathway && pathway !== "anal_rectal_lesion") {
+    if (age === null || Number.isNaN(age)) missing.push("age");
+    if (fit === null || Number.isNaN(fit)) missing.push("FIT test result");
+  }
 
   // We flag these as missing when relevant, but we still attempt a best-effort outcome.
   if (pathway === "abdominal_mass" && frailElderly === null) missing.push("frail/elderly status");
@@ -71,7 +74,15 @@ function decision({ pathway, age, fit, frailElderly, anaemia }) {
     supplementary: [],
   };
 
-  if (!pathway) return res;
+  function finalize(result) {
+    if (whoStatus === 3 || whoStatus === 4) {
+      result.outcome = "Face-to-face assessment";
+      result.mapping.push("WHO status 3–4 → face-to-face assessment.");
+    }
+    return result;
+  }
+
+  if (!pathway) return finalize(res);
 
   switch (pathway) {
     // Rule set A
@@ -80,7 +91,7 @@ function decision({ pathway, age, fit, frailElderly, anaemia }) {
       if (frailElderly === true) {
         res.outcome = "CT abdomen & pelvis (CT AP)";
         res.mapping.push("Abdominal mass + frail/elderly → CT AP.");
-        return res;
+        return finalize(res);
       }
       // If frailElderly is false OR unknown, fall back to FIT-band logic (best effort).
       if (band === "10_100") {
@@ -100,7 +111,13 @@ function decision({ pathway, age, fit, frailElderly, anaemia }) {
           "Frail/elderly status missing: if frail/elderly, pathway specifies CT AP regardless of FIT band." 
         );
       }
-      return res;
+      return finalize(res);
+    }
+    case "anal_rectal_lesion": {
+      res.step = "Rule set: Anal or rectal lesion";
+      res.outcome = "Face-to-face assessment";
+      res.mapping.push("Anal or rectal lesion → face-to-face assessment.");
+      return finalize(res);
     }
 
     // Rule set B
@@ -121,7 +138,7 @@ function decision({ pathway, age, fit, frailElderly, anaemia }) {
       if (age !== null && !Number.isNaN(age) && (age < 50 || age > 85)) {
         res.supplementary.push("Age entered is outside 50–85 for this pathway selection.");
       }
-      return res;
+      return finalize(res);
     }
 
     // Rule set C
@@ -142,7 +159,7 @@ function decision({ pathway, age, fit, frailElderly, anaemia }) {
       if (age !== null && !Number.isNaN(age) && age <= 85) {
         res.supplementary.push("Age entered is not >85 for this pathway selection.");
       }
-      return res;
+      return finalize(res);
     }
 
     // Rule set D
@@ -163,7 +180,7 @@ function decision({ pathway, age, fit, frailElderly, anaemia }) {
       if (age !== null && !Number.isNaN(age) && age <= 50) {
         res.supplementary.push("Age entered is not >50 for this pathway selection.");
       }
-      return res;
+      return finalize(res);
     }
 
     // Rule set E
@@ -174,7 +191,7 @@ function decision({ pathway, age, fit, frailElderly, anaemia }) {
       if (age !== null && !Number.isNaN(age) && age >= 50) {
         res.supplementary.push("Age entered is not <50 for this pathway selection.");
       }
-      return res;
+      return finalize(res);
     }
 
     // Rule set F
@@ -193,7 +210,7 @@ function decision({ pathway, age, fit, frailElderly, anaemia }) {
       if (age !== null && !Number.isNaN(age) && age >= 50) {
         res.supplementary.push("Age entered is not <50 for this pathway selection.");
       }
-      return res;
+      return finalize(res);
     }
 
     // Rule set G
@@ -202,7 +219,7 @@ function decision({ pathway, age, fit, frailElderly, anaemia }) {
       if (anaemia === true) {
         res.outcome = "Anaemia present — select the 'WITH anaemia' pathway (colonoscopy regardless of FIT)";
         res.mapping.push("With anaemia, rule set F overrides FIT band.");
-        return res;
+        return finalize(res);
       }
       if (band === "10_100" || band === "gt_100") {
         res.outcome = "Flexible sigmoidoscopy (FOS) → if NAD, proceed to colonoscopy";
@@ -219,7 +236,7 @@ function decision({ pathway, age, fit, frailElderly, anaemia }) {
       if (age !== null && !Number.isNaN(age) && age >= 50) {
         res.supplementary.push("Age entered is not <50 for this pathway selection.");
       }
-      return res;
+      return finalize(res);
     }
 
     // Rule set H
@@ -240,7 +257,7 @@ function decision({ pathway, age, fit, frailElderly, anaemia }) {
       if (age !== null && !Number.isNaN(age) && (age < 50 || age > 85)) {
         res.supplementary.push("Age entered is outside 50–85 for this pathway selection.");
       }
-      return res;
+      return finalize(res);
     }
 
     // Rule set I
@@ -261,13 +278,13 @@ function decision({ pathway, age, fit, frailElderly, anaemia }) {
       if (age !== null && !Number.isNaN(age) && age >= 50 && age <= 85) {
         res.supplementary.push("Age entered is 50–85; consider selecting the 50–85 weight loss pathway.");
       }
-      return res;
+      return finalize(res);
     }
 
     default:
       res.step = "Not covered";
       res.outcome = "This selection is not covered by the provided flowchart rules.";
-      return res;
+      return finalize(res);
   }
 }
 
@@ -414,14 +431,15 @@ export default function App() {
   const [fitStr, setFitStr] = useState("");
   const [frailElderly, setFrailElderly] = useState(null); // null | boolean
   const [anaemia, setAnaemia] = useState(null); // null | boolean
+  const [whoStatus, setWhoStatus] = useState(null); // null | 0-4
   const [copied, setCopied] = useState(false);
 
   const age = ageStr.trim() === "" ? null : Number(ageStr);
   const fit = fitStr.trim() === "" ? null : Number(fitStr);
 
   const result = useMemo(
-    () => decision({ pathway, age, fit, frailElderly, anaemia }),
-    [pathway, age, fit, frailElderly, anaemia]
+    () => decision({ pathway, age, fit, frailElderly, anaemia, whoStatus }),
+    [pathway, age, fit, frailElderly, anaemia, whoStatus]
   );
 
   const summaryText = useMemo(() => {
@@ -432,6 +450,7 @@ export default function App() {
     lines.push(`FIT: ${fit ?? "—"} (band ${bandLabel(result.band)})`);
     if (pathway === "abdominal_mass") lines.push(`Frail/elderly: ${frailElderly ?? "—"}`);
     if (pathway?.startsWith("rb_cibh")) lines.push(`Anaemia: ${anaemia ?? "—"}`);
+    lines.push(`WHO status: ${whoStatus ?? "—"}`);
     lines.push("");
     lines.push(`Outcome: ${result.outcome}`);
     lines.push(`Rule: ${result.step}`);
@@ -442,7 +461,7 @@ export default function App() {
       result.mapping.forEach((m) => lines.push(`- ${m}`));
     }
     return lines.join("\n");
-  }, [pathway, age, fit, frailElderly, anaemia, result]);
+  }, [pathway, age, fit, frailElderly, anaemia, whoStatus, result]);
 
   function reset() {
     setPathway("");
@@ -450,6 +469,7 @@ export default function App() {
     setFitStr("");
     setFrailElderly(null);
     setAnaemia(null);
+    setWhoStatus(null);
     setCopied(false);
   }
 
@@ -586,6 +606,32 @@ export default function App() {
                   Anaemia flag only applies to <b>Rectal bleeding + CIBH &lt;50</b>.
                 </div>
               )}
+            </div>
+
+            <div style={{ marginTop: 14, padding: 12, borderRadius: 14, border: "1px solid rgba(255,255,255,0.12)", background: "rgba(255,255,255,0.04)" }}>
+              <div style={{ fontSize: 12, fontWeight: 800, color: "#b9c6e6", textTransform: "uppercase", letterSpacing: 1 }}>
+                WHO performance status
+              </div>
+              <div style={{ marginTop: 10 }}>
+                <select
+                  style={S.select}
+                  value={whoStatus === null ? "" : String(whoStatus)}
+                  onChange={(e) => {
+                    const value = e.target.value;
+                    setWhoStatus(value === "" ? null : Number(value));
+                  }}
+                >
+                  <option value="" style={S.option}>Select status…</option>
+                  <option value="0" style={S.option}>0: Fully active, no restrictions.</option>
+                  <option value="1" style={S.option}>1: Restricted in strenuous activity but can do light work.</option>
+                  <option value="2" style={S.option}>2: Ambulatory, capable of self-care but unable to work.</option>
+                  <option value="3" style={S.option}>3: Limited self-care, mostly in bed/chair.</option>
+                  <option value="4" style={S.option}>4: Completely disabled, requires total care.</option>
+                </select>
+                <div style={S.hint}>
+                  If WHO status is <b>3</b> or <b>4</b>, recommendation changes to face-to-face assessment.
+                </div>
+              </div>
             </div>
           </section>
 
