@@ -372,6 +372,10 @@ const S = {
     color: "#07101f",
     fontWeight: 700,
   },
+  btnDisabled: {
+    opacity: 0.55,
+    cursor: "not-allowed",
+  },
   segmented: { display: "flex", gap: 6 },
   segBtn: (active, kind) => {
     const defaultBg = "rgba(255,255,255,0.06)";
@@ -434,6 +438,40 @@ const S = {
     fontWeight: 600,
     color: "#eaf0ff",
   },
+  overlay: {
+    position: "fixed",
+    inset: 0,
+    background: "rgba(5, 10, 20, 0.72)",
+    display: "flex",
+    alignItems: "center",
+    justifyContent: "center",
+    padding: 16,
+    zIndex: 50,
+  },
+  modal: {
+    width: "min(980px, 96vw)",
+    maxHeight: "92vh",
+    background: "rgba(15, 23, 42, 0.98)",
+    border: "1px solid rgba(255,255,255,0.14)",
+    borderRadius: 16,
+    padding: 16,
+    boxShadow: "0 30px 80px rgba(0,0,0,0.45)",
+    overflow: "auto",
+  },
+  textarea: {
+    width: "100%",
+    minHeight: 360,
+    resize: "vertical",
+    boxSizing: "border-box",
+    padding: 12,
+    borderRadius: 12,
+    border: "1px solid rgba(255,255,255,0.18)",
+    background: "rgba(255,255,255,0.06)",
+    color: "#eaf0ff",
+    outline: "none",
+    lineHeight: 1.45,
+    fontFamily: "ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, Liberation Mono, monospace",
+  },
 };
 
 export default function App() {
@@ -445,6 +483,11 @@ export default function App() {
   const [recentImaging, setRecentImaging] = useState(null); // null | boolean
   const [whoStatus, setWhoStatus] = useState(null); // null | 0-4
   const [copied, setCopied] = useState(false);
+  const [emailOpen, setEmailOpen] = useState(false);
+  const [emailDraft, setEmailDraft] = useState("");
+  const [patientName, setPatientName] = useState("");
+  const [hospitalNumber, setHospitalNumber] = useState("");
+  const [dob, setDob] = useState("");
 
   const age = ageStr.trim() === "" ? null : Number(ageStr);
   const fit = fitStr.trim() === "" ? null : Number(fitStr);
@@ -476,6 +519,41 @@ export default function App() {
     return lines.join("\n");
   }, [pathway, age, fit, frailElderly, anaemia, whoStatus, result]);
 
+  const emailTemplate = useMemo(() => {
+    const splitRecommendation = (text) => {
+      if (!text || text === "â€”") return [];
+      if (text.includes(" + ")) return text.split(" + ").map((t) => t.trim()).filter(Boolean);
+      return [text];
+    };
+
+    const lines = [];
+    lines.push("2WW Colorectal Referral");
+    lines.push("");
+    lines.push(`Patient name: ${patientName || "—"}`);
+    lines.push(`Hospital number: ${hospitalNumber || "—"}`);
+    lines.push(`Date of birth: ${dob || "—"}`);
+    lines.push("");
+    lines.push(`Pathway: ${pathways.find((p) => p.key === pathway)?.label ?? "â€”"}`);
+    lines.push(`Age: ${age ?? "â€”"}`);
+    lines.push(`FIT: ${fit ?? "â€”"} (band ${bandLabel(result.band)})`);
+    if (pathway === "abdominal_mass") lines.push(`Frail/elderly: ${frailElderly ?? "â€”"}`);
+    if (pathway?.startsWith("rb_cibh")) lines.push(`Anaemia: ${anaemia ?? "â€”"}`);
+    lines.push(`Recent imaging/colonoscopy within 12 months: ${recentImaging ?? "â€”"}`);
+    lines.push(`WHO status: ${whoStatus ?? "â€”"}`);
+    lines.push("");
+    lines.push("Recommendation:");
+    const recs = splitRecommendation(result.outcome);
+    recs.forEach((r) => lines.push(`- **${r}**`));
+    lines.push("");
+    if (result.mapping?.length) {
+      lines.push("Flowchart logic:");
+      result.mapping.forEach((m) => lines.push(`- **${m}**`));
+    } else {
+      lines.push(`Flowchart logic: **${result.step || "â€”"}**`);
+    }
+    return lines.join("\n");
+  }, [patientName, hospitalNumber, dob, pathway, age, fit, frailElderly, anaemia, whoStatus, recentImaging, result]);
+
   function reset() {
     setPathway("");
     setAgeStr("");
@@ -485,6 +563,11 @@ export default function App() {
     setRecentImaging(null);
     setWhoStatus(null);
     setCopied(false);
+    setEmailOpen(false);
+    setEmailDraft("");
+    setPatientName("");
+    setHospitalNumber("");
+    setDob("");
   }
 
   async function copySummary() {
@@ -497,8 +580,27 @@ export default function App() {
     }
   }
 
+  function openEmailDraft() {
+    setEmailDraft(emailTemplate);
+    setEmailOpen(true);
+  }
+
+  function sendEmail() {
+    const pathwayLabel = pathways.find((p) => p.key === pathway)?.label ?? "Unknown pathway";
+    const subject = `2WW colorectal referral (automated with colorectal co-pilot) - ${pathwayLabel}`;
+    const body = emailDraft || emailTemplate;
+    const mailto = `mailto:theoj2222@gmail.com?subject=${encodeURIComponent(subject)}&body=${encodeURIComponent(body)}`;
+    window.location.href = mailto;
+    setEmailOpen(false);
+  }
+
   const showFrail = pathway === "abdominal_mass";
   const showAnaemia = pathway === "rb_cibh_lt_50";
+  const emailFieldsComplete =
+    patientName.trim() !== "" && hospitalNumber.trim() !== "" && dob.trim() !== "";
+  const identifiersStarted =
+    patientName.trim() !== "" || hospitalNumber.trim() !== "" || dob.trim() !== "";
+  const canEmail = !result.missing?.length && emailFieldsComplete;
 
   return (
     <div style={S.page}>
@@ -513,7 +615,14 @@ export default function App() {
           </div>
           <div style={S.btnRow}>
             <button style={{ ...S.btn, ...S.btnPrimary }} onClick={copySummary}>
-              {copied ? "Copied" : "Copy summary"}
+              {copied ? "Copied" : "Copy Pathway Summary"}
+            </button>
+            <button
+              style={{ ...S.btn, ...(canEmail ? {} : S.btnDisabled) }}
+              onClick={openEmailDraft}
+              disabled={!canEmail}
+            >
+              Email referral (experimental)
             </button>
             <button style={S.btn} onClick={reset}>Reset</button>
           </div>
@@ -562,6 +671,47 @@ export default function App() {
                 </div>
               </div>
             </div>
+
+            <details style={{ marginTop: 14, padding: 12, borderRadius: 14, border: "1px solid rgba(255,255,255,0.12)", background: "rgba(255,255,255,0.04)" }}>
+              <summary style={{ fontSize: 12, fontWeight: 800, color: "#b9c6e6", textTransform: "uppercase", letterSpacing: 1, cursor: "pointer" }}>
+                Patient identifiers (for automatic email drafting)
+              </summary>
+              <div style={{ marginTop: 10, ...S.row }}>
+                <div>
+                  <div style={S.label}>Patient name</div>
+                  <input
+                    style={S.input}
+                    placeholder="e.g. Jane Smith"
+                    value={patientName}
+                    onChange={(e) => setPatientName(e.target.value)}
+                  />
+                </div>
+                <div>
+                  <div style={S.label}>Hospital number</div>
+                  <input
+                    style={S.input}
+                    placeholder="e.g. H1234567"
+                    value={hospitalNumber}
+                    onChange={(e) => setHospitalNumber(e.target.value)}
+                  />
+                </div>
+              </div>
+              <div style={{ marginTop: 10, maxWidth: 240 }}>
+                <div style={S.label}>Date of birth</div>
+                <input
+                  style={S.input}
+                  placeholder="e.g. 12-04-1980"
+                  value={dob}
+                  onChange={(e) => setDob(e.target.value)}
+                />
+                <div style={S.hint}>Format: DD-MM-YYYY.</div>
+              </div>
+              {identifiersStarted && (
+                <div style={{ marginTop: 10, color: "#fbbf24", fontWeight: 700 }}>
+                  DO NOT PUT PATIENT IDENTIFIERS IN, THIS IS A TEST FUNCTION
+                </div>
+              )}
+            </details>
 
             {showFrail && (
               <div style={{ marginTop: 14, padding: 12, borderRadius: 14, border: "1px solid rgba(255,255,255,0.12)", background: "rgba(255,255,255,0.04)" }}>
@@ -664,20 +814,30 @@ export default function App() {
               <div style={S.outcomeBig}>{result.outcome}</div>
 
               {result.missing?.length ? (
-                <div style={S.warn}>
-                  <div style={{ fontWeight: 800 }}>Needs to make proper decision:</div>
-                  <ul style={S.list}>
-                    {result.missing.map((m) => (
-                      <li key={m}>{m}</li>
-                    ))}
-                  </ul>
-                </div>
-              ) : (
-                <div style={S.ok}>
-                  <div style={{ fontWeight: 800 }}>Inputs complete for this rule set.</div>
-                  <div style={{ marginTop: 6, color: "#d7ffe6" }}>You can copy the summary for notes/referral documentation.</div>
-                </div>
-              )}
+              <div style={S.warn}>
+                <div style={{ fontWeight: 800 }}>Needs to make proper decision:</div>
+                <ul style={S.list}>
+                  {result.missing.map((m) => (
+                    <li key={m}>{m}</li>
+                  ))}
+                </ul>
+                {!emailFieldsComplete && (
+                  <div style={{ marginTop: 8, color: "#ffe7bf" }}>
+                    Email referral also requires patient name, hospital number, and date of birth.
+                  </div>
+                )}
+              </div>
+            ) : (
+              <div style={S.ok}>
+                <div style={{ fontWeight: 800 }}>Inputs complete for this rule set.</div>
+                <div style={{ marginTop: 6, color: "#d7ffe6" }}>You can copy the summary for notes/referral documentation.</div>
+                {!emailFieldsComplete && (
+                  <div style={{ marginTop: 6, color: "#d7ffe6" }}>
+                    Add patient name, hospital number, and date of birth to enable email referral.
+                  </div>
+                )}
+              </div>
+            )}
 
               {result.mapping?.length ? (
                 <div style={{ marginTop: 12 }}>
@@ -711,9 +871,38 @@ export default function App() {
         </div>
 
         <div style={S.author}>
-          <div>Website developed by <span style={S.authorHighlight}>Dr Theo Jackson</span> and <span style={S.authorHighlight}>Mr Vasilis Kalatzis</span> at <span style={S.authorHighlight}>UHNM</span></div>
+          <div>Website developed by <span style={S.authorHighlight}>Dr Theo Jackson</span> and <span style={S.authorHighlight}>Mr Vasileios Kalatzis</span> at <span style={S.authorHighlight}>UHNM</span></div>
         </div>
       </div>
+
+      {emailOpen && (
+        <div style={S.overlay} onClick={() => setEmailOpen(false)}>
+          <div style={S.modal} onClick={(e) => e.stopPropagation()}>
+            <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", gap: 12, flexWrap: "wrap" }}>
+              <div>
+                <div style={{ fontSize: 14, textTransform: "uppercase", letterSpacing: 1, color: "#b9c6e6" }}>
+                  Email Referral
+                </div>
+                <div style={{ marginTop: 6, fontWeight: 700 }}>Edit the referral text before sending</div>
+              </div>
+              <div style={S.btnRow}>
+                <button style={S.btn} onClick={() => setEmailOpen(false)}>Close</button>
+                <button style={{ ...S.btn, ...S.btnPrimary }} onClick={sendEmail}>Open email</button>
+              </div>
+            </div>
+            <div style={{ marginTop: 12 }}>
+              <textarea
+                style={S.textarea}
+                value={emailDraft}
+                onChange={(e) => setEmailDraft(e.target.value)}
+              />
+              <div style={S.hint}>
+                The referral will open in your email client addressed to <b>theoj2222@gmail.com</b>. Bold text uses **double asterisks**.
+              </div>
+            </div>
+          </div>
+        </div>
+      )}
     </div>
   );
 }
