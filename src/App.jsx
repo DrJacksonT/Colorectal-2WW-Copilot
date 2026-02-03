@@ -42,7 +42,7 @@ function bandLabel(band) {
   return band;
 }
 
-function decision({ pathway, age, fit, frailElderly, anaemia, whoStatus }) {
+function decision({ pathway, age, fit, frailElderly, anaemia, whoStatus, recentImaging }) {
   const missing = [];
   if (!pathway) missing.push("pathway selection");
   if (pathway && pathway !== "anal_rectal_lesion") {
@@ -73,6 +73,13 @@ function decision({ pathway, age, fit, frailElderly, anaemia, whoStatus }) {
       result.mapping.push("WHO status 3–4 → face-to-face assessment.");
     }
     return result;
+  }
+
+  // Recent imaging or colonoscopy within the past 12 months overrides to face-to-face
+  if (recentImaging === true) {
+    res.outcome = "Face-to-face appointment";
+    res.mapping.push("Recent imaging/colonoscopy within 12 months → face-to-face appointment.");
+    return finalize(res);
   }
 
   if (!pathway) return finalize(res);
@@ -366,15 +373,29 @@ const S = {
     fontWeight: 700,
   },
   segmented: { display: "flex", gap: 6 },
-  segBtn: (active) => ({
-    padding: "8px 10px",
-    borderRadius: 12,
-    border: "1px solid rgba(255,255,255,0.18)",
-    background: active ? "rgba(255,255,255,0.18)" : "rgba(255,255,255,0.06)",
-    color: "#eaf0ff",
-    cursor: "pointer",
-    minWidth: 46,
-  }),
+  segBtn: (active, kind) => {
+    const defaultBg = "rgba(255,255,255,0.06)";
+    const defaultActiveBg = "rgba(255,255,255,0.18)";
+    let background = active ? defaultActiveBg : defaultBg;
+    let border = "1px solid rgba(255,255,255,0.18)";
+    if (active && kind === "yes") {
+      background = "rgba(16,185,129,0.18)"; // green
+      border = "1px solid rgba(16,185,129,0.35)";
+    }
+    if (active && kind === "no") {
+      background = "rgba(239,68,68,0.18)"; // red
+      border = "1px solid rgba(239,68,68,0.35)";
+    }
+    return {
+      padding: "8px 10px",
+      borderRadius: 12,
+      border,
+      background,
+      color: "#eaf0ff",
+      cursor: "pointer",
+      minWidth: 46,
+    };
+  },
   outcomeBox: {
     borderRadius: 16,
     padding: 14,
@@ -421,6 +442,7 @@ export default function App() {
   const [fitStr, setFitStr] = useState("");
   const [frailElderly, setFrailElderly] = useState(null); // null | boolean
   const [anaemia, setAnaemia] = useState(null); // null | boolean
+  const [recentImaging, setRecentImaging] = useState(null); // null | boolean
   const [whoStatus, setWhoStatus] = useState(null); // null | 0-4
   const [copied, setCopied] = useState(false);
 
@@ -428,8 +450,8 @@ export default function App() {
   const fit = fitStr.trim() === "" ? null : Number(fitStr);
 
   const result = useMemo(
-    () => decision({ pathway, age, fit, frailElderly, anaemia, whoStatus }),
-    [pathway, age, fit, frailElderly, anaemia, whoStatus]
+    () => decision({ pathway, age, fit, frailElderly, anaemia, whoStatus, recentImaging }),
+    [pathway, age, fit, frailElderly, anaemia, whoStatus, recentImaging]
   );
 
   const summaryText = useMemo(() => {
@@ -440,6 +462,7 @@ export default function App() {
     lines.push(`FIT: ${fit ?? "—"} (band ${bandLabel(result.band)})`);
     if (pathway === "abdominal_mass") lines.push(`Frail/elderly: ${frailElderly ?? "—"}`);
     if (pathway?.startsWith("rb_cibh")) lines.push(`Anaemia: ${anaemia ?? "—"}`);
+    lines.push(`Recent imaging/colonoscopy within 12 months: ${recentImaging ?? "—"}`);
     lines.push(`WHO status: ${whoStatus ?? "—"}`);
     lines.push("");
     lines.push(`Outcome: ${result.outcome}`);
@@ -459,6 +482,7 @@ export default function App() {
     setFitStr("");
     setFrailElderly(null);
     setAnaemia(null);
+    setRecentImaging(null);
     setWhoStatus(null);
     setCopied(false);
   }
@@ -546,17 +570,17 @@ export default function App() {
                     <div style={{ fontWeight: 700 }}>Frail / elderly</div>
                     <div style={S.hint}>Used for Rule set A (abdominal mass).</div>
                   </div>
-                  <div style={S.segmented}>
-                    <button style={S.segBtn(frailElderly === true)} onClick={() => setFrailElderly(true)}>
-                      Yes
-                    </button>
-                    <button style={S.segBtn(frailElderly === false)} onClick={() => setFrailElderly(false)}>
-                      No
-                    </button>
-                    <button style={S.segBtn(frailElderly === null)} onClick={() => setFrailElderly(null)}>
-                      —
-                    </button>
-                  </div>
+                    <div style={S.segmented}>
+                      <button style={S.segBtn(frailElderly === true, "yes")} onClick={() => setFrailElderly(true)}>
+                        Yes
+                      </button>
+                      <button style={S.segBtn(frailElderly === false, "no")} onClick={() => setFrailElderly(false)}>
+                        No
+                      </button>
+                      <button style={S.segBtn(frailElderly === null)} onClick={() => setFrailElderly(null)}>
+                        —
+                      </button>
+                    </div>
                 </div>
               </div>
             )}
@@ -568,17 +592,17 @@ export default function App() {
                     <div style={{ fontWeight: 700 }}>Anaemia present</div>
                     <div style={S.hint}>Used for rectal bleeding + CIBH &lt;50 pathways.</div>
                   </div>
-                  <div style={S.segmented}>
-                    <button style={S.segBtn(anaemia === true)} onClick={() => setAnaemia(true)}>
-                      Yes
-                    </button>
-                    <button style={S.segBtn(anaemia === false)} onClick={() => setAnaemia(false)}>
-                      No
-                    </button>
-                    <button style={S.segBtn(anaemia === null)} onClick={() => setAnaemia(null)}>
-                      —
-                    </button>
-                  </div>
+                    <div style={S.segmented}>
+                      <button style={S.segBtn(anaemia === true, "yes")} onClick={() => setAnaemia(true)}>
+                        Yes
+                      </button>
+                      <button style={S.segBtn(anaemia === false, "no")} onClick={() => setAnaemia(false)}>
+                        No
+                      </button>
+                      <button style={S.segBtn(anaemia === null)} onClick={() => setAnaemia(null)}>
+                        —
+                      </button>
+                    </div>
                 </div>
               </div>
             )}
@@ -605,6 +629,19 @@ export default function App() {
                 </select>
                 <div style={S.hint}>
                   If WHO status is <b>3</b> or <b>4</b>, recommendation changes to face-to-face assessment.
+                </div>
+              </div>
+            </div>
+            <div style={{ marginTop: 14, padding: 12, borderRadius: 14, border: "1px solid rgba(255,255,255,0.12)", background: "rgba(255,255,255,0.04)" }}>
+              <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", gap: 10, flexWrap: "wrap" }}>
+                <div>
+                  <div style={{ fontWeight: 700 }}>Recent imaging/colonoscopy in past 12 months</div>
+                  <div style={S.hint}>If yes, recommendation becomes face-to-face appointment.</div>
+                </div>
+                <div style={S.segmented}>
+                  <button style={S.segBtn(recentImaging === true, "yes")} onClick={() => setRecentImaging(true)}>Yes</button>
+                  <button style={S.segBtn(recentImaging === false, "no")} onClick={() => setRecentImaging(false)}>No</button>
+                  <button style={S.segBtn(recentImaging === null)} onClick={() => setRecentImaging(null)}>—</button>
                 </div>
               </div>
             </div>
@@ -674,7 +711,7 @@ export default function App() {
         </div>
 
         <div style={S.author}>
-          <div>Website developed by <span style={S.authorHighlight}>Dr Theo Jackson</span> at <span style={S.authorHighlight}>UHNM</span></div>
+          <div>Website developed by <span style={S.authorHighlight}>Dr Theo Jackson</span> and <span style={S.authorHighlight}>Mr Vasilis Kalatzis</span> at <span style={S.authorHighlight}>UHNM</span></div>
         </div>
       </div>
     </div>
