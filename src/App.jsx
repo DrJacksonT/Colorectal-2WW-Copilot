@@ -1,4 +1,4 @@
-import React, { useMemo, useState } from "react";
+﻿import React, { useMemo, useState } from "react";
 
 /**
  * 2WW Colorectal Pathway Selector (MVP)
@@ -272,6 +272,87 @@ function decision({ pathway, age, fit, frailElderly, anaemia, whoStatus, recentI
   }
 }
 
+// Merge multiple pathway outcomes into a single combined outcome object.
+function mergeOutcomes(outcomes) {
+  if (!outcomes || outcomes.length === 0) return null;
+  const union = (arr) => Array.from(new Set((arr || []).flat()));
+  const missing = union(outcomes.map((o) => o.missing || []));
+  const mapping = union(outcomes.map((o) => o.mapping || []));
+  const supplementary = union(outcomes.map((o) => o.supplementary || []));
+
+  // If any outcome mandates face-to-face, prefer that as the merged outcome.
+  for (const o of outcomes) {
+    if (String(o.outcome || "").toLowerCase().includes("face-to-face")) {
+      return {
+        per_pathway: outcomes,
+        merged_outcome: "Face-to-face assessment",
+        merged_step: "Face-to-face (one or more pathways)",
+        merged_pathway: null,
+        missing,
+        mapping,
+        supplementary,
+      };
+    }
+  }
+
+  // Helper: canonicalise tokens found in outcome text to known procedure labels + priority
+  function canonicaliseToken(t) {
+    // Only return canonical procedure tokens we care about for merged outcomes.
+    const s = String(t || "").trim();
+    const low = s.toLowerCase();
+    if (!s) return null;
+    if (low.includes("colonoscopy")) return { label: "Colonoscopy", prio: 100 };
+    if (low.includes("ogd")) return { label: "OGD", prio: 95 };
+    if (low.includes("ct abdomen") || low.includes("ct ap") || low.includes("ct abdomen & pelvis") ) return { label: "CT abdomen & pelvis (CT AP)", prio: 90 };
+    if (low.includes("ct colonography") || low.includes("ctc")) return { label: "CT colonography (CTC)", prio: 88 };
+    if (low.includes("ct tap") || low.includes("ct thorax/abdomen/pelvis") || low.includes("ct thorax")) return { label: "CT thorax/abdomen/pelvis (CT TAP)", prio: 86 };
+    if (low.includes("tagged ct")) return { label: "Tagged CT scan", prio: 80 };
+    if (low.includes("flexible sigmoidoscopy") || low.includes("fos")) return { label: "Flexible sigmoidoscopy", prio: 70 };
+    // Skip conditional or unhelpful fragments (e.g. 'if NAD', 'follow pathway', 'needs FIT')
+    return null;
+  }
+
+  const tokenMap = new Map(); // label -> highest prio
+
+  for (const o of outcomes) {
+    const text = String(o.outcome || "");
+    // split on +, arrow, comma, semicolon
+    const parts = text.split(/\s*(?:\+|→|,|;)\s*/).map((p) => p.trim()).filter(Boolean);
+    for (const p of parts) {
+      const canon = canonicaliseToken(p);
+      if (!canon) continue;
+      const existing = tokenMap.get(canon.label);
+      if (!existing || canon.prio > existing) tokenMap.set(canon.label, canon.prio);
+    }
+  }
+
+  // Suppression rules: when a higher-priority procedure is recommended, remove lower-priority
+  // alternatives that would not be performed (e.g., colonoscopy supersedes flexible sigmoidoscopy).
+  if (tokenMap.has("Colonoscopy") && tokenMap.has("Flexible sigmoidoscopy")) {
+    tokenMap.delete("Flexible sigmoidoscopy");
+  }
+
+  // Sort tokens by priority descending, then label
+  const mergedTokens = Array.from(tokenMap.entries())
+    .map(([label, prio]) => ({ label, prio }))
+    .sort((a, b) => b.prio - a.prio || a.label.localeCompare(b.label))
+    .map((t) => t.label);
+
+  const mergedOutcomeText = mergedTokens.length ? mergedTokens.join(" + ") : "—";
+
+  const mergedStep = outcomes.map((o) => o.step).filter(Boolean).join(" || ");
+
+  return {
+    per_pathway: outcomes,
+    merged_outcome: mergedOutcomeText,
+    merged_step: mergedStep,
+    merged_pathway: null,
+    missing,
+    mapping,
+    supplementary,
+  };
+}
+
 function toClipboard(text) {
   if (!navigator?.clipboard?.writeText) return Promise.reject();
   return navigator.clipboard.writeText(text);
@@ -424,6 +505,17 @@ const S = {
     color: "#d7ffe6",
   },
   list: { margin: "8px 0 0 0", paddingLeft: 18, color: "#d7e2ff", lineHeight: 1.5 },
+  mappingBox: {
+    marginTop: 12,
+    padding: 12,
+    borderRadius: 12,
+    background: "linear-gradient(180deg, rgba(11,20,34,0.6), rgba(11,20,34,0.55))",
+    border: "1px solid rgba(99,102,241,0.12)",
+    boxShadow: "0 6px 18px rgba(2,6,23,0.35)",
+    display: "block",
+  },
+  mappingTitle: { fontSize: 13, fontWeight: 800, color: "#93c5fd", textTransform: "uppercase", letterSpacing: 1 },
+  mappingList: { margin: "8px 0 0 0", paddingLeft: 18, color: "#d7e2ff", lineHeight: 1.5 },
   hint: { fontSize: 12, color: "#b9c6e6", marginTop: 6, lineHeight: 1.35 },
   author: {
     marginTop: 40,
@@ -476,6 +568,7 @@ const S = {
 
 export default function App() {
   const [pathway, setPathway] = useState("");
+  const [selectedPaths, setSelectedPaths] = useState([]);
   const [ageStr, setAgeStr] = useState("");
   const [fitStr, setFitStr] = useState("");
   const [frailElderly, setFrailElderly] = useState(null); // null | boolean
@@ -483,8 +576,6 @@ export default function App() {
   const [recentImaging, setRecentImaging] = useState(null); // null | boolean
   const [whoStatus, setWhoStatus] = useState(null); // null | 0-4
   const [copied, setCopied] = useState(false);
-  const [emailOpen, setEmailOpen] = useState(false);
-  const [emailDraft, setEmailDraft] = useState("");
   const [patientName, setPatientName] = useState("");
   const [hospitalNumber, setHospitalNumber] = useState("");
   const [dob, setDob] = useState("");
@@ -492,24 +583,68 @@ export default function App() {
   const age = ageStr.trim() === "" ? null : Number(ageStr);
   const fit = fitStr.trim() === "" ? null : Number(fitStr);
 
-  const result = useMemo(
-    () => decision({ pathway, age, fit, frailElderly, anaemia, whoStatus, recentImaging }),
-    [pathway, age, fit, frailElderly, anaemia, whoStatus, recentImaging]
-  );
+  const perResults = useMemo(() => {
+    const sels = selectedPaths.length ? selectedPaths : (pathway ? [pathway] : []);
+    return sels.map((pid) => ({
+      ...(decision({ pathway: pid, age, fit, frailElderly, anaemia, whoStatus, recentImaging })),
+      pathway: pid,
+    }));
+  }, [selectedPaths, pathway, age, fit, frailElderly, anaemia, whoStatus, recentImaging]);
+
+  const mergedResult = useMemo(() => mergeOutcomes(perResults), [perResults]);
+
+  const result = useMemo(() => {
+    if (!perResults || perResults.length === 0) return decision({ pathway, age, fit, frailElderly, anaemia, whoStatus, recentImaging });
+    if (perResults.length === 1) return perResults[0];
+    // build a display-like result from mergedResult for compatibility with existing UI
+    return {
+      missing: mergedResult?.missing || [],
+      band: null,
+      outcome: mergedResult?.merged_outcome || "—",
+      step: mergedResult?.merged_step || "",
+      mapping: mergedResult?.mapping || [],
+      supplementary: mergedResult?.supplementary || [],
+    };
+  }, [perResults, mergedResult, pathway, age, fit, frailElderly, anaemia, whoStatus, recentImaging]);
+
+  function togglePathway(key) {
+    const next = selectedPaths.includes(key) ? selectedPaths.filter((p) => p !== key) : [...selectedPaths, key];
+    setSelectedPaths(next);
+    setPathway(next[0] || "");
+  }
 
   const summaryText = useMemo(() => {
     const lines = [];
     lines.push("2WW Colorectal Pathway Selector — Summary");
-    lines.push(`Pathway: ${pathways.find((p) => p.key === pathway)?.label ?? "—"}`);
+    const sels = selectedPaths.length ? selectedPaths : (pathway ? [pathway] : []);
+    if (sels.length === 0) {
+      lines.push("Pathway: —");
+    } else if (sels.length === 1) {
+      lines.push(`Pathway: ${pathways.find((p) => p.key === sels[0])?.label ?? "—"}`);
+    } else {
+      lines.push(`Pathways: ${sels.map((k) => pathways.find((p) => p.key === k)?.label ?? k).join(" || ")}`);
+    }
     lines.push(`Age: ${age ?? "—"}`);
     lines.push(`FIT: ${fit ?? "—"} (band ${bandLabel(result.band)})`);
     if (pathway === "abdominal_mass") lines.push(`Frail/elderly: ${frailElderly ?? "—"}`);
-    if (pathway?.startsWith("rb_cibh")) lines.push(`Anaemia: ${anaemia ?? "—"}`);
+    if (sels.some((k) => k === "abdominal_mass")) lines.push(`Frail/elderly: ${frailElderly ?? "—"}`);
+    if (sels.some((k) => k.startsWith("rb_cibh"))) lines.push(`Anaemia: ${anaemia ?? "—"}`);
     lines.push(`Recent imaging/colonoscopy within 12 months: ${recentImaging ?? "—"}`);
     lines.push(`WHO status: ${whoStatus ?? "—"}`);
     lines.push("");
-    lines.push(`Outcome: ${result.outcome}`);
-    lines.push(`Rule: ${result.step}`);
+    if (perResults.length > 1) {
+      lines.push("Per-pathway outcomes:");
+      perResults.forEach((pr) => {
+        const label = pathways.find((p) => p.key === pr.pathway)?.label ?? pr.pathway;
+        lines.push(`${label}: ${pr.outcome} (${pr.step})`);
+      });
+      lines.push("");
+      lines.push(`Merged outcome: ${mergedResult?.merged_outcome ?? "—"} (from ${pathways.find((p) => p.key === mergedResult?.merged_pathway)?.label ?? "—"})`);
+      lines.push(`Rule: ${mergedResult?.merged_step ?? ""}`);
+    } else {
+      lines.push(`Outcome: ${result.outcome}`);
+      lines.push(`Rule: ${result.step}`);
+    }
     if (result.missing?.length) lines.push(`Needs: ${result.missing.join(", ")}`);
     if (result.mapping?.length) {
       lines.push("");
@@ -517,7 +652,7 @@ export default function App() {
       result.mapping.forEach((m) => lines.push(`- ${m}`));
     }
     return lines.join("\n");
-  }, [pathway, age, fit, frailElderly, anaemia, whoStatus, result]);
+  }, [selectedPaths, pathway, age, fit, frailElderly, anaemia, whoStatus, perResults, mergedResult, result]);
 
   const emailTemplate = useMemo(() => {
     const splitRecommendation = (text) => {
@@ -533,7 +668,14 @@ export default function App() {
     lines.push(`Hospital number: ${hospitalNumber || "—"}`);
     lines.push(`Date of birth: ${dob || "—"}`);
     lines.push("");
-    lines.push(`Pathway: ${pathways.find((p) => p.key === pathway)?.label ?? "â€”"}`);
+    const sels = selectedPaths.length ? selectedPaths : (pathway ? [pathway] : []);
+    if (sels.length === 0) {
+      lines.push(`Pathway: â€”`);
+    } else if (sels.length === 1) {
+      lines.push(`Pathway: ${pathways.find((p) => p.key === sels[0])?.label ?? "â€”"}`);
+    } else {
+      lines.push(`Pathways: ${sels.map((k) => pathways.find((p) => p.key === k)?.label ?? k).join(" || ")}`);
+    }
     lines.push(`Age: ${age ?? "â€”"}`);
     lines.push(`FIT: ${fit ?? "â€”"} (band ${bandLabel(result.band)})`);
     if (pathway === "abdominal_mass") lines.push(`Frail/elderly: ${frailElderly ?? "â€”"}`);
@@ -541,21 +683,43 @@ export default function App() {
     lines.push(`Recent imaging/colonoscopy within 12 months: ${recentImaging ?? "â€”"}`);
     lines.push(`WHO status: ${whoStatus ?? "â€”"}`);
     lines.push("");
-    lines.push("Recommendation:");
-    const recs = splitRecommendation(result.outcome);
-    recs.forEach((r) => lines.push(`- **${r}**`));
-    lines.push("");
-    if (result.mapping?.length) {
-      lines.push("Flowchart logic:");
-      result.mapping.forEach((m) => lines.push(`- **${m}**`));
+    if (perResults.length > 1) {
+      lines.push("Per-pathway recommendation:");
+      perResults.forEach((pr) => {
+        const label = pathways.find((p) => p.key === pr.pathway)?.label ?? pr.pathway;
+        lines.push(`- ${label}: **${pr.outcome}**`);
+      });
+      lines.push("");
+      lines.push(`Merged recommendation: **${mergedResult?.merged_outcome ?? "â€”"}**`);
     } else {
-      lines.push(`Flowchart logic: **${result.step || "â€”"}**`);
+      lines.push("Recommendation:");
+      const recs = splitRecommendation(result.outcome);
+      recs.forEach((r) => lines.push(`- **${r}**`));
+    }
+    lines.push("");
+    if (perResults.length > 1) {
+      lines.push("");
+      lines.push("Flowchart logic (per pathway):");
+      perResults.forEach((pr) => {
+        const label = pathways.find((p) => p.key === pr.pathway)?.label ?? pr.pathway;
+        if (pr.mapping?.length) {
+          lines.push(`- ${label}:`);
+          pr.mapping.forEach((m) => lines.push(`  - **${m}**`));
+        }
+      });
+    } else {
+      if (result.mapping?.length) {
+        lines.push("Flowchart logic:");
+        result.mapping.forEach((m) => lines.push(`- **${m}**`));
+      } else {
+        lines.push(`Flowchart logic: **${result.step || "â€”"}**`);
+      }
     }
     lines.push("");
     lines.push("GP entered information for consideration:");
     lines.push("");
     return lines.join("\n");
-  }, [patientName, hospitalNumber, dob, pathway, age, fit, frailElderly, anaemia, whoStatus, recentImaging, result]);
+  }, [patientName, hospitalNumber, dob, selectedPaths, pathway, age, fit, frailElderly, anaemia, whoStatus, recentImaging, perResults, mergedResult, result]);
 
   function reset() {
     setPathway("");
@@ -566,8 +730,6 @@ export default function App() {
     setRecentImaging(null);
     setWhoStatus(null);
     setCopied(false);
-    setEmailOpen(false);
-    setEmailDraft("");
     setPatientName("");
     setHospitalNumber("");
     setDob("");
@@ -583,27 +745,9 @@ export default function App() {
     }
   }
 
-  function openEmailDraft() {
-    setEmailDraft(emailTemplate);
-    setEmailOpen(true);
-  }
-
-  function sendEmail() {
-    const pathwayLabel = pathways.find((p) => p.key === pathway)?.label ?? "Unknown pathway";
-    const subject = `2WW colorectal referral (automated with colorectal co-pilot) - ${pathwayLabel}`;
-    const body = emailDraft || emailTemplate;
-    const mailto = `mailto:theoj2222@gmail.com?subject=${encodeURIComponent(subject)}&body=${encodeURIComponent(body)}`;
-    window.location.href = mailto;
-    setEmailOpen(false);
-  }
-
-  const showFrail = pathway === "abdominal_mass";
-  const showAnaemia = pathway === "rb_cibh_lt_50";
-  const emailFieldsComplete =
-    patientName.trim() !== "" && hospitalNumber.trim() !== "" && dob.trim() !== "";
-  const identifiersStarted =
-    patientName.trim() !== "" || hospitalNumber.trim() !== "" || dob.trim() !== "";
-  const canEmail = !result.missing?.length && emailFieldsComplete;
+  const currentSelection = selectedPaths.length ? selectedPaths : (pathway ? [pathway] : []);
+  const showFrail = currentSelection.includes("abdominal_mass");
+  const showAnaemia = currentSelection.includes("rb_cibh_lt_50");
 
   return (
     <div style={S.page}>
@@ -620,13 +764,6 @@ export default function App() {
             <button style={{ ...S.btn, ...S.btnPrimary }} onClick={copySummary}>
               {copied ? "Copied" : "Copy Pathway Summary"}
             </button>
-            <button
-              style={{ ...S.btn, ...(canEmail ? {} : S.btnDisabled) }}
-              onClick={openEmailDraft}
-              disabled={!canEmail}
-            >
-              Email referral (experimental)
-            </button>
             <button style={S.btn} onClick={reset}>Reset</button>
           </div>
         </div>
@@ -637,16 +774,27 @@ export default function App() {
             <div style={S.cardTitle}>Inputs</div>
 
             <div style={{ marginTop: 12 }}>
-              <div style={S.label}>Pathway</div>
-              <select style={S.select} value={pathway} onChange={(e) => setPathway(e.target.value)}>
-                <option value="" style={S.option}>Select…</option>
-                {pathways.map((p) => (
-                  <option key={p.key} value={p.key} style={S.option}>
-                    {p.label}
-                  </option>
-                ))}
-              </select>
-              <div style={S.hint}>Tip: start by selecting a pathway; the outcome panel updates instantly.</div>
+              <div style={S.label}>Pathway(s)</div>
+              <div style={{ display: "flex", gap: 8, flexWrap: "wrap", marginTop: 8 }}>
+                {pathways.map((p) => {
+                  const active = selectedPaths.includes(p.key);
+                  return (
+                    <button
+                      key={p.key}
+                      type="button"
+                      onClick={() => togglePathway(p.key)}
+                      style={{
+                        ...S.pill,
+                        border: active ? "1px solid rgba(59,130,246,0.7)" : S.pill.border,
+                        background: active ? "rgba(59,130,246,0.12)" : S.pill.background,
+                      }}
+                    >
+                      {p.label}
+                    </button>
+                  );
+                })}
+              </div>
+              <div style={S.hint}>Tip: select one or more pathways; the outcome panel updates instantly.</div>
             </div>
 
             <div style={{ marginTop: 12, ...S.row }}>
@@ -675,46 +823,7 @@ export default function App() {
               </div>
             </div>
 
-            <details style={{ marginTop: 14, padding: 12, borderRadius: 14, border: "1px solid rgba(255,255,255,0.12)", background: "rgba(255,255,255,0.04)" }}>
-              <summary style={{ fontSize: 12, fontWeight: 800, color: "#b9c6e6", textTransform: "uppercase", letterSpacing: 1, cursor: "pointer" }}>
-                Patient identifiers (for automatic email drafting)
-              </summary>
-              <div style={{ marginTop: 10, ...S.row }}>
-                <div>
-                  <div style={S.label}>Patient name</div>
-                  <input
-                    style={S.input}
-                    placeholder="e.g. Jane Smith"
-                    value={patientName}
-                    onChange={(e) => setPatientName(e.target.value)}
-                  />
-                </div>
-                <div>
-                  <div style={S.label}>Hospital number</div>
-                  <input
-                    style={S.input}
-                    placeholder="e.g. H1234567"
-                    value={hospitalNumber}
-                    onChange={(e) => setHospitalNumber(e.target.value)}
-                  />
-                </div>
-              </div>
-              <div style={{ marginTop: 10, maxWidth: 240 }}>
-                <div style={S.label}>Date of birth</div>
-                <input
-                  style={S.input}
-                  placeholder="e.g. 12-04-1980"
-                  value={dob}
-                  onChange={(e) => setDob(e.target.value)}
-                />
-                <div style={S.hint}>Format: DD-MM-YYYY.</div>
-              </div>
-              {identifiersStarted && (
-                <div style={{ marginTop: 10, color: "#fbbf24", fontWeight: 700 }}>
-                  DO NOT PUT PATIENT IDENTIFIERS IN, THIS IS A TEST FUNCTION
-                </div>
-              )}
-            </details>
+            {/* Patient identifiers removed from UI (kept in state for easy restoration) */}
 
             {showFrail && (
               <div style={{ marginTop: 14, padding: 12, borderRadius: 14, border: "1px solid rgba(255,255,255,0.12)", background: "rgba(255,255,255,0.04)" }}>
@@ -814,7 +923,24 @@ export default function App() {
               <div style={{ marginTop: 10, fontSize: 13, color: "#b9c6e6", textTransform: "uppercase", letterSpacing: 1 }}>
                 Recommended next step
               </div>
-              <div style={S.outcomeBig}>{result.outcome}</div>
+              {perResults.length > 1 ? (
+                <div>
+                  <div style={{ fontSize: 12, color: "#b9c6e6", marginTop: 8, fontWeight: 700 }}>Merged outcome</div>
+                  <div style={{ ...S.outcomeBig, fontSize: 20 }}>{mergedResult?.merged_outcome ?? result.outcome}</div>
+                  {mergedResult?.merged_pathway ? (
+                    <div style={{ fontSize: 12, color: "#b9c6e6", marginTop: 6 }}>From: {pathways.find((p) => p.key === mergedResult.merged_pathway)?.label ?? mergedResult.merged_pathway}</div>
+                  ) : (
+                    <div style={{ fontSize: 12, color: "#b9c6e6", marginTop: 6 }}>{mergedResult?.merged_step}</div>
+                  )}
+                  <div style={{ marginTop: 12 }}>
+                    <div style={S.warn}>
+                      <div style={{ fontWeight: 800 }}>Merged recommendation — use clinical judgement</div>
+                    </div>
+                  </div>
+                </div>
+              ) : (
+                <div style={S.outcomeBig}>{result.outcome}</div>
+              )}
 
               {result.missing?.length ? (
               <div style={S.warn}>
@@ -824,30 +950,21 @@ export default function App() {
                     <li key={m}>{m}</li>
                   ))}
                 </ul>
-                {!emailFieldsComplete && (
-                  <div style={{ marginTop: 8, color: "#ffe7bf" }}>
-                    Email referral also requires patient name, hospital number, and date of birth.
-                  </div>
-                )}
+                {/* Email referral temporarily removed — patient identifiers still accepted for notes */}
               </div>
             ) : (
               <div style={S.ok}>
                 <div style={{ fontWeight: 800 }}>Inputs complete for this rule set.</div>
-                <div style={{ marginTop: 6, color: "#d7ffe6" }}>You can copy the summary for notes/referral documentation.</div>
-                {!emailFieldsComplete && (
-                  <div style={{ marginTop: 6, color: "#d7ffe6" }}>
-                    Add patient name, hospital number, and date of birth to enable email referral.
-                  </div>
-                )}
-              </div>
-            )}
+                <div style={{ marginTop: 6, color: "#d7ffe6" }}>You can copy the summary by clicking "Copy Pathway Summary" above.</div>
+                {/* Email referral temporarily removed */}
+
+                </div>
+              )}
 
               {result.mapping?.length ? (
-                <div style={{ marginTop: 12 }}>
-                  <div style={{ fontSize: 12, fontWeight: 800, color: "#b9c6e6", textTransform: "uppercase", letterSpacing: 1 }}>
-                    Flowchart mapping
-                  </div>
-                  <ul style={S.list}>
+                <div style={S.mappingBox}>
+                  <div style={S.mappingTitle}>Flowchart mapping</div>
+                  <ul style={S.mappingList}>
                     {result.mapping.map((n, i) => (
                       <li key={i}>{n}</li>
                     ))}
@@ -867,6 +984,7 @@ export default function App() {
                   </ul>
                 </div>
               ) : null}
+              {/* Per-pathway outcomes removed (mapping box contains equivalent details) */}
             </div>
 
             
@@ -878,34 +996,7 @@ export default function App() {
         </div>
       </div>
 
-      {emailOpen && (
-        <div style={S.overlay} onClick={() => setEmailOpen(false)}>
-          <div style={S.modal} onClick={(e) => e.stopPropagation()}>
-            <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", gap: 12, flexWrap: "wrap" }}>
-              <div>
-                <div style={{ fontSize: 14, textTransform: "uppercase", letterSpacing: 1, color: "#b9c6e6" }}>
-                  Email Referral
-                </div>
-                <div style={{ marginTop: 6, fontWeight: 700 }}>Edit the referral text before sending</div>
-              </div>
-              <div style={S.btnRow}>
-                <button style={S.btn} onClick={() => setEmailOpen(false)}>Close</button>
-                <button style={{ ...S.btn, ...S.btnPrimary }} onClick={sendEmail}>Open email</button>
-              </div>
-            </div>
-            <div style={{ marginTop: 12 }}>
-              <textarea
-                style={S.textarea}
-                value={emailDraft}
-                onChange={(e) => setEmailDraft(e.target.value)}
-              />
-              <div style={S.hint}>
-                The referral will open in your email client addressed to <b>theoj2222@gmail.com</b>. Bold text uses **double asterisks**.
-              </div>
-            </div>
-          </div>
-        </div>
-      )}
+      {/* Email referral modal removed temporarily */}
     </div>
   );
 }
